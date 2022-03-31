@@ -21,7 +21,7 @@ import datetime             # para cálculos de tempo usado pelo programa
 
 def imprimir_cabecalho():  # Exibe informações iniciais do programa
     print(58*'-')
-    print('Programa ETL de arquivo ocorrências aeronáuticas no Brasil')
+    print('Programa ETL de arquivo ocorrências aeronáuticas no Brasil com exportação para MongoDB')
     print(58*'-')
 
 
@@ -89,24 +89,24 @@ def abrir_arquivo_aviao():
         sys.exit()
     return df_aviao
 
-# Executa a abertura do arquivo aerodromo.csv e coloca NA e NAN nos valores não informados
+# Executa a abertura do arquivo fator_contribuinte.csv e coloca NA e NAN nos valores não informados
 # a fim de facilitar a importação
-def abrir_arquivo_aero():
+def abrir_arquivo_fator():
     try:
-        print('9. Lendo arquivo aerodromo...')
+        print('9. Lendo arquivo fator_contribuinte...')
         valores_ausentes=['***','NULL']
         # Ao encontrar algo especificado em "valores_ausentes", estes serão automaticamente convertidos para Na ou Nan
-        df_aviao = pd.read_csv("aeronave.csv",sep=';',na_values=valores_ausentes)
+        df_fator = pd.read_csv("fator_contribuinte.csv",sep=';',na_values=valores_ausentes)
         print('9.1 Arquivo lido com sucesso')
     #Testa se o arquivo existe
     except FileNotFoundError as e:
-         print('*** ERRO: Arquivo aerodromo.csv não encontrado. Favor verificar.')
+         print('*** ERRO: Arquivo fator_contribuinte.csv não encontrado. Favor verificar.')
          sys.exit()
     #Outros erros são exibidos
     except BaseException as e:
         print("*** ERRO: ".format(e))
         sys.exit()
-    return df_aero
+    return df_fator
 
 # Verifica se o arquivo tem as colunas nos formatos corretos
 # Se não, mostra erro e encerra o programa
@@ -155,6 +155,31 @@ def validar_arquivo_aviao(df_aviao):
                      "aeronave_motor_quantidade": pa.Column(pa.String, nullable=True),
                      "aeronave_pmd": pa.Column(pa.Int),
                      "aeronave_fatalidades_total": pa.Column(pa.Int)
+                     }
+        )
+        schema_aero.validate(df_aviao,lazy=True)
+        df_aviao.drop_duplicates(['codigo_ocorrencia2'],inplace=True)
+        print('7.3 Arquivo validado com sucesso')
+    except pa.errors.SchemaErrors as e:
+        print('*** Erros encontrados na validação. Favor verificar:')
+        print(58 * '-')
+        print(e.failure_cases)    # erros de dataframe ou schema
+        print(e.data)             # dataframe inválido
+        print(58 * '-')
+        sys.exit()
+
+# Verifica se o arquivo tem as colunas nos formatos corretos
+# Se não, mostra erro e encerra o programa
+def validar_arquivo_fator(df_aviao):
+    try:
+        print('10. Validando arquivo fator contribuinte...')
+        print('10.1 Excluindo registros duplicados...')
+        schema_fator = pa.DataFrameSchema(
+            columns={"codigo_ocorrencia3": pa.Column(pa.Int),
+                     "fator_nome": pa.Column(pa.String),
+                     "fator_aspecto": pa.Column(pa.String),
+                     "fator_condicionante": pa.Column(pa.String),
+                     "fator_area": pa.Column(pa.String)
                      }
         )
         schema_aero.validate(df_aviao,lazy=True)
@@ -271,10 +296,10 @@ if __name__ == "__main__":
     exportar_mysql_aero(conexao,df_aero)
 
     # Fazer ETL com aeródromos
-    df_aero = abrir_arquivo_aero()
-    validar_arquivo_aero(df_aero)
-    ## Não existem transformações a serem feitas em aeronaves por isso passará à exportação
-    exportar_mysql_aero(conexao,df_aero)
+    df_fator = abrir_arquivo_fator()
+    validar_arquivo_fator(df_fator)
+    ## Não existem transformações a serem feitas em fator contribuinte por isso passará à exportação
+    exportar_mysql_fator(conexao,df_fator)
 
     tempo_final = datetime.datetime.now()
     tempo_total = tempo_final-tempo_inicial
