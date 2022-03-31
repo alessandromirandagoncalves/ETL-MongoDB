@@ -19,35 +19,28 @@ import datetime                 # para cálculos de tempo usado pelo programa
 import pymongo                  # Para exportar dados para MongoDB
 from pymongo import MongoClient # Para exportar dados para MongoDB
 import re
-import pprint
 
 def imprimir_cabecalho():  # Exibe informações iniciais do programa
-    print(58*'-')
+    print(86*'-')
     print('Programa ETL de arquivo ocorrências aeronáuticas no Brasil com exportação para MongoDB')
-    print(58*'-')
+    print(86*'-')
 
 
 def conectar_banco():  # Conecta ao banco de dados e deixa aconexão aberta em "cliente"
      try:
          print('4. Conectando com MongoDB')
          # Credenciais para conexão
-         database_string = "mongodb+srv://alessandro_inovacao:Data1007@mflix.2jixa.mongodb.net/myFirstDatabase?retryWrites=true&w=majority"
+         database_string = "mongodb://localhost:27017"
 
-         # Primeiramente se conecta ao MongoDB
-         #cliente = pymongo.MongoClient(database_string)
-         #print(cliente.list_database_names())
-         #print('4.1 Conexão com Mongo com sucesso.')
-
-         cliente = pymongo.MongoClient(
-         "mongodb+srv://alessandro_inovacao:Data1007@mflix.2jixa.mongodb.net/myFirstDatabase")
+         cliente = pymongo.MongoClient(database_string)
          print('4.1 Conexão com Mongo com sucesso.')
-         teste = cliente['myFirstDatabase']
+         conexao = cliente['Incidentes_aereos']
 
      except pymongo.errors.ServerSelectionTimeoutError as e:
-         print('*** ERRO: Timeout - Não foi possível conectar ao banco ')
-         sys.exit(0)
+          print('*** ERRO: Timeout - Não foi possível conectar ao banco ')
+          sys.exit(0)
 
-     return teste
+     return conexao
 
 # Executa a abertura do arquivo ocorrencia.csv e coloca NA e NAN nos valores não informados
 # a fim de facilitar a importação
@@ -168,21 +161,23 @@ def validar_arquivo_aviao(df_aviao):
 
 # Verifica se o arquivo tem as colunas nos formatos corretos
 # Se não, mostra erro e encerra o programa
-def validar_arquivo_fator(df_aviao):
+def validar_arquivo_fator(df_fator):
     try:
         print('10. Validando arquivo fator contribuinte...')
         print('10.1 Excluindo registros duplicados...')
         schema_fator = pa.DataFrameSchema(
             columns={"codigo_ocorrencia3": pa.Column(pa.Int),
-                     "fator_nome": pa.Column(pa.String),
-                     "fator_aspecto": pa.Column(pa.String),
-                     "fator_condicionante": pa.Column(pa.String),
-                     "fator_area": pa.Column(pa.String)
+                     "fator_nome": pa.Column(pa.String, nullable = True),
+                     "fator_aspecto": pa.Column(pa.String, nullable = True),
+                     "fator_condicionante": pa.Column(pa.String, nullable = True),
+                     "fator_area": pa.Column(pa.String, nullable = True)
                      }
         )
-        schema_fator.validate(df_aviao,lazy=True)
-        df_aviao.drop_duplicates(['codigo_ocorrencia2'],inplace=True)
-        print('7.3 Arquivo validado com sucesso')
+        schema_fator.validate(df_fator,lazy=True)
+        # registros com codigo_ocorrencia3 podem ser duplicados
+        # pois uma ocorrência pode ter divresos fatores contribuintes associados
+        print('10.2 Arquivo validado com sucesso')
+
     except pa.errors.SchemaErrors as e:
         print('*** Erros encontrados na validação. Favor verificar:')
         print(58 * '-')
@@ -206,79 +201,54 @@ def transformar_arquivo_ocor(df_ocor):
         print(58 * '-')
         sys.exit()
 
-#cria banco Mysql e exporta dados do dataframe para a tabela "ocorrencias"
-def criar_banco_mysql(cliente):
-    try:
-        print('4.2 Criando banco Mysql...')
-        cliente.execute('create database CENIPA;')
-        print('4.3 Banco Mysql gerado.')
-    # Banco já existe. Despreza erro de criação
-    # except sql.exc.DatabaseError as e:
-    #     print('>>> Aviso: Banco já existe. Continuando. <<<')
-    except ValueError as e:
-        print('***ERRO: '.format(e))
-        pass
+def criar_colecao(dbname):
+    collection_name = dbname["user_1_items"]
+    item_1 = {
+        "_id": "U1IT00001",
+        "item_name": "Blender",
+        "max_discount": "10%",
+        "batch_number": "RR450020FRG",
+        "price": 340,
+        "category": "kitchen appliance"
+    }
 
-#exporta dados do dataframe para a tabela "ocorrencias"
-def exportar_mysql_ocor(cliente,df_ocor):
-    try:
-        print('5 Gerando tabela ocorrencias...')
-        # Convert dataframe to sql table
-        df_ocor.to_sql('ocorrencias', cliente, index=False)
-    # Tabela já existe. Despreza erro de criação e continua.
-    except ValueError as e:
-        print('>>> Aviso: Tabela já existe. Continuando. <<<')
+    item_2 = {
+        "_id": "U1IT00002",
+        "item_name": "Egg",
+        "category": "food",
+        "quantity": 12,
+        "price": 36,
+        "item_description": "brown country eggs"
+    }
+    collection_name.insert_many([item_1, item_2])
+
+def unir_arquivos(df_ocor, df_aviao): #, df_fator):
+    r = pd.merge(df_ocor, df_aviao, how='left', on='codigo_ocorrencia2')
+    # Remove colunas duplicadas
+    r.drop(columns=["codigo_ocorrencia2"], inplace=True)
+    #r.drop_duplicates(subset ="codigo_ocorrencia2", keep = False, inplace = True)
+    return r
+
+def exportar_Mongo(dbname):
+    r = unir_arquivos(df_ocor, df_aviao)#, df_fator)
+    collection_name = dbname["historico"]
+    r.reset_index(inplace=True)
+    r_dicionario = r.to_dict("records")
+    print(r_dicionario)
+    collection_name.insert_many(r_dicionario)
 
     # try:
-    #     print('5.1 Adicionando chave primária...')
-    #     cliente.execute('ALTER TABLE ocorrencias ADD PRIMARY KEY (`codigo_ocorrencia`);')
-    # except sql.exc.ProgrammingError as e:
-    #     print('>>> Aviso: chave primária já existe. Continuando... <<<')
+    #     r.to_csv("exportacao.csv", encoding = 'utf-16', index = False)
+    # except PermissionError as e:
+    #     print('*** Erro: permissão negada ao escrever arquivo. Verifique se está aberto e tente novamente.')
 
-    # try:
-    #     print('5.2 Adicionando índice para chaves estrangeiras...')
-    #     cliente.execute('create index idx_codigo_ocorrencia2 on ocorrencias(codigo_ocorrencia2);')
-    # except sql.exc.ProgrammingError as e:
-    #     print('>>> Aviso: índice já existe. Continuando... <<<')
-    # print('5.3 Tabela ocorrencias gerada.')
+#    criar_colecao(dbname)
 
-#Abre banco Mysql e exporta dados do dataframe para a tabela "aeronaves"
-# def exportar_mysql_aviao(cliente,df_aviao):
-#     try:
-#         # Converte dataframe para a tabela Mysql
-#         print('8 Gerando tabela aeronaves...')
-#         df_aviao.to_sql('aeronaves', cliente, index=False)
-#
-#     except ValueError as e:
-#         print('>>> Aviso: Tabela já existe. Continuando. <<<')
-
-# SQL muito grande
-#     except sql.exc.OperationalError as e:
-#         print('ERRO: Got a packet bigger than `max_allowed_packet` bytes')
-#         print('Execute as linhas abaixo no seu ambiente Mysql:')
-#         print('   set global net_buffer_length=1000000;')
-#         print('   set global max_allowed_packet=1000000000;')
-#         sys.exit(0)
-#
-#     try:
-#         print('8.1 Adicionando chave primária...')
-#         cliente.execute('ALTER TABLE aeronaves ADD PRIMARY KEY (`codigo_ocorrencia2`);')
-#     except sql.exc.ProgrammingError as e:
-#         print('>>> Aviso: chave primária já existe. Continuando... <<<')
-#
-#     try:
-#         print('8.2 Adicionando chave estrangeira...')
-#         cliente.execute('ALTER TABLE ocorrencias ADD CONSTRAINT FK_OCORRENCIA_2 '
-#                         'FOREIGN KEY (`codigo_ocorrencia2`) '
-#                         'REFERENCES aeronaves(`codigo_ocorrencia2`);')
-#     except sql.exc.DatabaseError as e:
-#         print('>>> Aviso: chave estrangeira já existe. Continuando... <<<')
-#
-#     print('8.3 Banco Mysql alterado.')
 
 if __name__ == "__main__":
     tempo_inicial = datetime.datetime.now()
     imprimir_cabecalho()
+    dbname = conectar_banco()
 
     # Fazer ETL com ocorrências primeiramente
     df_ocor = abrir_arquivo_ocor()
@@ -298,6 +268,9 @@ if __name__ == "__main__":
     validar_arquivo_fator(df_fator)
     ## Não existem transformações a serem feitas em fator contribuinte por isso passará à exportação
     #exportar_mysql_fator(cliente,df_fator)
+
+    #df_ocor.merge(df_aviao,how='left')#,left_on='codigo_ocorrencia2', right_on='codigo_ocorrencia2')
+    exportar_Mongo(dbname)
 
     tempo_final = datetime.datetime.now()
     tempo_total = tempo_final-tempo_inicial
