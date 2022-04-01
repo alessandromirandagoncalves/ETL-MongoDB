@@ -4,7 +4,7 @@
 # Março/2022                                            #
 #########################################################
 # Programa irá fazer ETL do arquivo ocorrencia.csv e aeronave.csv que possuem as ocorrências de
-# incidentes e acidentes, tabela de aeronaves e aeródromos envolvidos nas ocorrencias
+# incidentes e acidentes, tabela de aeronaves e fatores envolvidos nas ocorrencias
 # investigadas pelo CENIPA e podem ser obtidos no endereço
 # https://dados.gov.br/dataset/ocorrencias-aeronauticas-da-aviacao-civil-brasileira
 # e irá gerar um banco de dados MongoDB na nuvem com os resultados.
@@ -34,7 +34,7 @@ def conectar_banco():  # Conecta ao banco de dados e deixa aconexão aberta em "
 
          cliente = pymongo.MongoClient(database_string)
          print('4.1 Conexão com Mongo com sucesso.')
-         conexao = cliente['Incidentes_aereos']
+         conexao = cliente['incidentes_aereos']
 
      except pymongo.errors.ServerSelectionTimeoutError as e:
           print('*** ERRO: Timeout - Não foi possível conectar ao banco ')
@@ -164,7 +164,6 @@ def validar_arquivo_aviao(df_aviao):
 def validar_arquivo_fator(df_fator):
     try:
         print('10. Validando arquivo fator contribuinte...')
-        print('10.1 Excluindo registros duplicados...')
         schema_fator = pa.DataFrameSchema(
             columns={"codigo_ocorrencia3": pa.Column(pa.Int),
                      "fator_nome": pa.Column(pa.String, nullable = True),
@@ -176,7 +175,7 @@ def validar_arquivo_fator(df_fator):
         schema_fator.validate(df_fator,lazy=True)
         # registros com codigo_ocorrencia3 podem ser duplicados
         # pois uma ocorrência pode ter divresos fatores contribuintes associados
-        print('10.2 Arquivo validado com sucesso')
+        print('10.1 Arquivo validado com sucesso')
 
     except pa.errors.SchemaErrors as e:
         print('*** Erros encontrados na validação. Favor verificar:')
@@ -191,6 +190,8 @@ def transformar_arquivo_ocor(df_ocor):
         #Cria uma nova coluna juntando data com hora e deixando no formato "datetime"
         print('3. Transformando arquivo ocorrencia...')
         df_ocor['ocorrencia_dia_hora'] = pd.to_datetime(df_ocor.ocorrencia_dia.astype(str) + ' ' + df_ocor.ocorrencia_hora)
+        #Trata para não ocorrer erro de inserção NaT
+        df_ocor['ocorrencia_dia_hora'] = df_ocor['ocorrencia_dia_hora'].astype(object).where(df_ocor['ocorrencia_dia_hora'].notnull(), None)
         print('3.1 Arquivo transformado com sucesso')
 
     except pa.errors.SchemaErrors as e:
@@ -201,49 +202,45 @@ def transformar_arquivo_ocor(df_ocor):
         print(58 * '-')
         sys.exit()
 
-def criar_colecao(dbname):
-    collection_name = dbname["user_1_items"]
-    item_1 = {
-        "_id": "U1IT00001",
-        "item_name": "Blender",
-        "max_discount": "10%",
-        "batch_number": "RR450020FRG",
-        "price": 340,
-        "category": "kitchen appliance"
-    }
+def transformar_arquivo_fator(df_fator):
+    try:
+        # cria uma coluna Descricao onde vai unir nome,aspecto,condicionante,fator área
+        print('11. Transformando arquivo fator...')
+        df_fator_colunado = df_fator
+        df_fator_colunado['descricao'] = df_fator['fator_nome'] + ' ' + df_fator['fator_aspecto'] + ' ' + df_fator[
+            'fator_condicionante'] + ' ' + df_fator['fator_area']
+        df_fator_colunado = df_fator_colunado[['codigo_ocorrencia3', 'descricao']]
+        # Agrupa para ficar somente com colunas: codigo-ocorrencia3 e descricaoo
+        df_fator_colunado = df_fator_colunado.groupby('codigo_ocorrencia3')['descricao'].apply(list)
+        print('11.1 Arquivo transformado com sucesso')
 
-    item_2 = {
-        "_id": "U1IT00002",
-        "item_name": "Egg",
-        "category": "food",
-        "quantity": 12,
-        "price": 36,
-        "item_description": "brown country eggs"
-    }
-    collection_name.insert_many([item_1, item_2])
+    except pa.errors.SchemaErrors as e:
+        print('*** Erros encontrados na transformação. Favor verificar:')
+        print(58 * '-')
+        print(e.failure_cases)  # erros de dataframe ou schema
+        print(e.data)  # dataframe inválido
+        print(58 * '-')
+        sys.exit()
+    return df_fator_colunado
 
-def unir_arquivos(df_ocor, df_aviao): #, df_fator):
+# Junta os dataframes para gerar somente um dataframe para ser exportado para o Mongodb
+def unir_arquivos(df_ocor, df_aviao, df_fator): #, df_fator):
     r = pd.merge(df_ocor, df_aviao, how='left', on='codigo_ocorrencia2')
+    #r = pd.merge(r, df_fator, how='left', on='codigo_ocorrencia3')
     # Remove colunas duplicadas
     r.drop(columns=["codigo_ocorrencia2"], inplace=True)
-    #r.drop_duplicates(subset ="codigo_ocorrencia2", keep = False, inplace = True)
     return r
 
-def exportar_Mongo(dbname):
-    r = unir_arquivos(df_ocor, df_aviao)#, df_fator)
-    collection_name = dbname["historico"]
+# Copia o Dataframe final para o Mongodb na colecao historico
+def exportar_Mongo(dbname, r):
+    colecao = "historico"
+    print ("12 Exportando para o MongoDb - banco: ",dbname.name)
+    collection_name = dbname[colecao]
     r.reset_index(inplace=True)
     r_dicionario = r.to_dict("records")
-    print(r_dicionario)
+    print ("12.1 Preparando registros na coleção: ",colecao)
     collection_name.insert_many(r_dicionario)
-
-    # try:
-    #     r.to_csv("exportacao.csv", encoding = 'utf-16', index = False)
-    # except PermissionError as e:
-    #     print('*** Erro: permissão negada ao escrever arquivo. Verifique se está aberto e tente novamente.')
-
-#    criar_colecao(dbname)
-
+    print ("13. Dados exportados com sucesso")
 
 if __name__ == "__main__":
     tempo_inicial = datetime.datetime.now()
@@ -255,22 +252,19 @@ if __name__ == "__main__":
     validar_arquivo_ocor(df_ocor)
     transformar_arquivo_ocor(df_ocor)
     cliente = conectar_banco()
-    #exportar_mysql_ocor(cliente,df_ocor)
 
     # Fazer ETL com aeronaves
     df_aviao = abrir_arquivo_aviao()
     validar_arquivo_aviao(df_aviao)
-    ## Não existem transformações a serem feitas em aeronaves por isso passará à exportação
-    #exportar_mysql_aero(cliente,df_aero)
+    ## Não existem transformações a serem feitas em aeronaves
 
     # Fazer ETL com fator contribuinte
     df_fator = abrir_arquivo_fator()
     validar_arquivo_fator(df_fator)
-    ## Não existem transformações a serem feitas em fator contribuinte por isso passará à exportação
-    #exportar_mysql_fator(cliente,df_fator)
+    df_fator = transformar_arquivo_fator(df_fator)
 
-    #df_ocor.merge(df_aviao,how='left')#,left_on='codigo_ocorrencia2', right_on='codigo_ocorrencia2')
-    exportar_Mongo(dbname)
+    r = unir_arquivos(df_ocor,df_aviao,df_fator)
+    exportar_Mongo(dbname,r)
 
     tempo_final = datetime.datetime.now()
     tempo_total = tempo_final-tempo_inicial
